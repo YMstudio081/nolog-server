@@ -21,6 +21,7 @@ wss.on("connection", (ws, req) => {
     try {
       const data = JSON.parse(message);
 
+      // join のみ特別扱い
       if (data.type === "join") {
         currentRoom = data.roomId;
 
@@ -32,7 +33,8 @@ wss.on("connection", (ws, req) => {
         return;
       }
 
-      if (data.type === "message" && currentRoom) {
+      // join 以外はすべて room 内に relay
+      if (currentRoom) {
         const clients = rooms.get(currentRoom);
         if (!clients) return;
 
