@@ -33,13 +33,14 @@ wss.on("connection", (ws, req) => {
         return;
       }
 
-      // join 以外はすべて room 内に relay
+      // join 以外はすべて room 内に relay（送信元は除外）
       if (currentRoom) {
         const clients = rooms.get(currentRoom);
         if (!clients) return;
 
         for (const client of clients) {
-          if (client.readyState === 1) {
+          // 送信元は除外
+          if (client !== ws && client.readyState === 1) {
             client.send(JSON.stringify(data));
           }
         }
