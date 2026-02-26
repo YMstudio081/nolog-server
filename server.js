@@ -1,63 +1,154 @@
-const http = require("http");
-const { WebSocketServer } = require("ws");
+const WebSocket = require("ws");
 
-const PORT = process.env.PORT || 3000;
+const LOG_LEVEL = process.env.LOG_LEVEL || "dev";
+const safeLog = (...args) => {
+  if (LOG_LEVEL === "dev") console.log(...args);
+};
+const safeError = (...args) => console.error(...args);
 
-// HTTPサーバー作成（Renderが監視するため必須）
-const server = http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end("NOLOG WebSocket Server Running");
+const PORT = process.env.PORT || 3001;
+
+const wss = new WebSocket.Server({
+  port: PORT,
+  host: "0.0.0.0",
 });
-
-// WebSocketサーバー
-const wss = new WebSocketServer({ server });
 
 const rooms = new Map();
 
-wss.on("connection", (ws, req) => {
-  let currentRoom = null;
+const genPeerId = () =>
+  Math.random().toString(36).slice(2, 8);
 
-  ws.on("message", (message) => {
+const sendJson = (ws, obj) => {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+};
+
+safeLog("✅ NOLOG WS SERVER RUNNING");
+safeLog(`LISTEN HOST: 0.0.0.0`);
+safeLog(`LISTEN PORT: ${PORT}`);
+
+wss.on("connection", (ws) => {
+  ws.__peerId = genPeerId();
+  ws.__roomId = null;
+  ws.__publicKey = null; // ★ 追加：サーバー保持
+
+  ws.on("message", (raw) => {
+    let data;
     try {
-      const data = JSON.parse(message);
-
-      // join のみ特別扱い
-      if (data.type === "join") {
-        currentRoom = data.roomId;
-
-        if (!rooms.has(currentRoom)) {
-          rooms.set(currentRoom, new Set());
-        }
-
-        rooms.get(currentRoom).add(ws);
-        return;
-      }
-
-      // join 以外はすべて room 内に relay（送信元は除外）
-      if (currentRoom) {
-        const clients = rooms.get(currentRoom);
-        if (!clients) return;
-
-        for (const client of clients) {
-          // 送信元は除外
-          if (client !== ws && client.readyState === 1) {
-            client.send(JSON.stringify(data));
-          }
-        }
-      }
-
+      data = JSON.parse(raw);
     } catch (err) {
-      console.error("Invalid message:", err);
+      safeError("Invalid JSON:", err);
+      return;
+    }
+
+    // ─────────────────────────────
+    // JOIN
+    // ─────────────────────────────
+    if (data.type === "join") {
+      const roomId = data.roomId;
+      if (!roomId) return;
+
+      ws.__roomId = roomId;
+
+      if (!rooms.has(roomId)) {
+        rooms.set(roomId, new Set());
+      }
+
+      const clients = rooms.get(roomId);
+      clients.add(ws);
+
+      // 自分へjoined通知
+      sendJson(ws, {
+        type: "joined",
+        peerId: ws.__peerId,
+      });
+
+      // ★ 既存peerへ接続通知
+      for (const client of clients) {
+        if (client === ws) continue;
+
+        sendJson(client, {
+          type: "peerConnected",
+          peerId: ws.__peerId,
+        });
+
+        sendJson(ws, {
+          type: "peerConnected",
+          peerId: client.__peerId,
+        });
+
+        // ★ 既存peerのpublicKeyを新規参加者へ送信
+        if (client.__publicKey) {
+          sendJson(ws, {
+            type: "publicKey",
+            key: client.__publicKey,
+          });
+        }
+      }
+
+      safeLog("[JOIN]", roomId, ws.__peerId);
+      return;
+    }
+
+    const roomId = ws.__roomId;
+    if (!roomId) return;
+
+    const clients = rooms.get(roomId);
+    if (!clients) return;
+
+    // ─────────────────────────────
+    // PUBLIC KEY
+    // ─────────────────────────────
+    if (data.type === "publicKey" && data.key) {
+      ws.__publicKey = data.key; // ★ サーバー保存
+
+      for (const client of clients) {
+        if (client !== ws) {
+          sendJson(client, {
+            type: "publicKey",
+            key: data.key,
+          });
+        }
+      }
+
+      safeLog("[PUBLICKEY]", roomId, ws.__peerId);
+      return;
+    }
+
+    // ─────────────────────────────
+    // その他メッセージ relay（エコーバック防止）
+    // ─────────────────────────────
+    for (const client of clients) {
+      if (client !== ws) {
+        sendJson(client, data);
+      }
     }
   });
 
   ws.on("close", () => {
-    if (currentRoom && rooms.has(currentRoom)) {
-      rooms.get(currentRoom).delete(ws);
+    const roomId = ws.__roomId;
+    if (!roomId) return;
+
+    const clients = rooms.get(roomId);
+    if (!clients) return;
+
+    clients.delete(ws);
+
+    for (const client of clients) {
+      sendJson(client, {
+        type: "peerLeft",
+        peerId: ws.__peerId,
+      });
+    }
+
+    if (clients.size === 0) {
+      rooms.delete(roomId);
+      safeLog("ROOM DELETED:", roomId);
     }
   });
-});
 
-server.listen(PORT, () => {
-  console.log("NOLOG WebSocket server running on port", PORT);
+  ws.on("error", (err) => {
+    safeError("WebSocket error:", err);
+  });
 });
