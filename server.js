@@ -1,5 +1,10 @@
 const WebSocket = require("ws");
 
+console.log("[AUDIT][SERVER_FILE] server.js loaded");
+console.log("[AUDIT][ENV_PORT]", process.env.PORT);
+console.log("[AUDIT][NODE_VERSION]", process.version);
+console.log("[AUDIT][PID]", process.pid);
+
 const LOG_LEVEL = process.env.LOG_LEVEL || "dev";
 const MAX_MESSAGE_SIZE = 64 * 1024; // 64KB
 const MAX_ROOM_SIZE = 2;
@@ -14,6 +19,11 @@ const wss = new WebSocket.Server({
   port: PORT,
   host: "0.0.0.0",
 });
+
+console.log("[AUDIT][WS_SERVER_CREATED]");
+if (wss && wss.options) {
+  console.log("[AUDIT][WS_OPTIONS]", wss.options);
+}
 
 const rooms = new Map();
 
@@ -30,15 +40,11 @@ function sendJson(ws, data) {
   }
 }
 
-safeLog("✅ NOLOG WS SERVER RUNNING");
-safeLog(`LISTEN HOST: 0.0.0.0`);
-safeLog(`LISTEN PORT: ${PORT}`);
+wss.on("connection", (ws, req) => {
+  console.log("[AUDIT][WS_CONNECTION]");
+  console.log("[AUDIT][WS_HEADERS]", req?.headers);
+  console.log("[AUDIT][REMOTE_IP]", req?.socket?.remoteAddress);
 
-safeLog("✅ NOLOG WS SERVER RUNNING");
-safeLog(`LISTEN HOST: 0.0.0.0`);
-safeLog(`LISTEN PORT: ${PORT}`);
-
-wss.on("connection", (ws) => {
   safeLog("NEW CONNECTION");
   ws.isAlive = true;
 
@@ -51,6 +57,11 @@ wss.on("connection", (ws) => {
   ws.__publicKey = null; // ★ 追加：サーバー保持
 
   ws.on("message", (raw) => {
+    console.log(
+      "[AUDIT][WS_MESSAGE_RAW]",
+      raw?.toString()?.slice(0, 120)
+    );
+
     const rawStr = typeof raw === "string" ? raw : raw.toString();
 
     if (rawStr.length > MAX_MESSAGE_SIZE) {
@@ -205,6 +216,7 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
+    console.log("[AUDIT][WS_CLOSE]");
     const roomId = ws.__roomId;
     if (!roomId) return;
 
@@ -228,6 +240,7 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("error", (err) => {
+    console.log("[AUDIT][WS_ERROR]", err?.message);
     safeError("WebSocket error:", err);
   });
 });
